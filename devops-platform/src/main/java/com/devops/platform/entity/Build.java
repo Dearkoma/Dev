@@ -1,0 +1,90 @@
+package com.devops.platform.entity;
+
+import jakarta.persistence.*;
+import lombok.Data;
+import org.hibernate.annotations.CreationTimestamp;
+
+import java.time.LocalDateTime;
+
+/**
+ * 构建记录实体
+ */
+@Data
+@Entity
+@Table(name = "builds")
+public class Build {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false)
+    private Long projectId;
+
+    @Column
+    private Long pipelineId;  // 允许 NULL，对应 SQL FOREIGN KEY ON DELETE SET NULL
+
+    @Column(nullable = false, length = 50)
+    private String buildNumber;  // 构建编号，如 #123
+
+    @Column(length = 20)
+    private String triggerType = "MANUAL";  // MANUAL / PUSH / SCHEDULE
+
+    @Column(length = 500)
+    private String gitCommit;  // 触发的 Git commit
+
+    @Column(length = 20)
+    private String status = "PENDING";  // PENDING / RUNNING / SUCCESS / FAILED / CANCELLED
+
+    @Column
+    private Integer totalSteps = 0;
+
+    @Column
+    private Integer completedSteps = 0;
+
+    @CreationTimestamp
+    @Column(updatable = false)
+    private LocalDateTime startTime;
+
+    @Column
+    private LocalDateTime endTime;
+
+    @Column
+    private Long durationMs;  // 构建耗时（毫秒）
+
+    @Column(length = 50)
+    private String triggeredBy = "admin";
+
+    @Column(columnDefinition = "TEXT")
+    private String resultMessage;  // 构建结果描述
+
+    @Column(columnDefinition = "TEXT")
+    private String buildParams;  // 构建参数 JSON，如 {"version":"1.2.0","env":"prod"}
+
+    @Column(length = 500)
+    private String branch;  // 实际构建的分支
+
+    @Column
+    private Boolean skipDocker = false;  // 是否跳过 Docker 构建阶段
+
+    @Column
+    private Boolean skipK8s = false;  // 是否跳过 K8s 部署阶段
+
+    @Column(length = 128)
+    private String dbName;  // 构建时指定的目标数据库名（用于部署时数据库隔离）
+
+    @Column(length = 20)
+    private String deployStrategy = "ROLLING";  // 部署策略: ROLLING / BLUE_GREEN / CANARY
+
+    @Column
+    private Integer failedStepIndex;  // 失败步骤的全局索引（0-based），用于断点续跑。null 表示无失败或已完成
+
+    @Column
+    private Integer failedStageIndex;  // 失败阶段的索引（0-based），配合 failedStepIndex 使用
+
+    @Column
+    private Boolean resumeFromFailure = false;  // 本次构建是否是从失败步骤断点续跑
+
+    @Column(columnDefinition = "LONGTEXT")
+    private String logContent;  // 构建日志内容（数据库存储兜底）
+}

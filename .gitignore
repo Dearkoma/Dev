@@ -1,0 +1,41 @@
+**/target/
+.idea
+*.iml
+*.class
+**/test
+
+**/node_modules/
+**/tmp/
+
+# 前端构建产物（开发模式不需要，build 时自动生成）
+**/src/main/resources/static/
+frontend/dist/
+
+# 日志与运行时产物
+**/logs/
+**/cddata/
+**/data/workspace/
+*.log
+*.log.*
+
+# 论文产物与参考资料（非平台代码）
+outputs/
+参考文献/
+
+# WorkBuddy 工作空间（非平台代码）
+.workbuddy/
+
+# Maven wrapper 下载缓存
+.mvn/wrapper/dists/
+
+# 第三方工具二进制 (Trivy 等 - 体积大, 团队各自下载)
+# 整个 tools/ 目录都不入仓, 只留必要的 README
+tools/
+!tools/.gitkeep
+!tools/trivy/README.md
+
+# 与平台代码无关的本地文件
+# DevOps.pm(.bak) 是外部工具生成的项目描述文件; Teacher/ 是毕设参考资料(PDF/模板 rar)
+/DevOps.pm
+/DevOps.pm.bak
+/Teacher/

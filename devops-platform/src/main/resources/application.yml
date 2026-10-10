@@ -1,0 +1,156 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: devops-platform
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/devops_platform?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: root
+    password: Dearkoma.962464
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 30000
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+#        dialect: org.hibernate.dialect.MySQLDialect
+        jdbc:
+          batch_size: 20
+    open-in-view: false
+
+  websocket:
+    allowed-origins: "*"
+
+logging:
+  level:
+    com.devops: INFO
+    org.springframework: INFO
+    org.hibernate.SQL: WARN
+  file:
+    name: ./cddata/logs/devops-platform.log
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-}] %logger{36} - %msg%n"
+    file:    "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-}] %logger{36} - %msg%n"
+
+# Actuator 健康检查与指标暴露
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: when-authorized
+  info:
+    env:
+      enabled: true
+
+  # Micrometer Tracing 配置
+  tracing:
+    sampling:
+      probability: 1.0     # 全量采样（生产环境建议 0.1）
+    propagation:
+      type: W3C            # W3C Trace Context 标准传播
+
+# DevOps 平台自定义配置
+devops:
+  pipeline:
+    workspace-dir: ./data/workspace
+    log-dir: ./data/logs
+    # 模拟模式（true=不执行真实命令，用延迟模拟；false=真正执行 Shell/Docker/kubectl 命令）
+    simulation-mode: false
+    # Shell 执行器（Windows 用 "cmd /c"，Linux/Mac 用 "bash -c"）
+    shell:
+      command: cmd /c
+    # Docker 镜像仓库地址（为空则使用本地镜像名）
+    docker:
+      registry: ""
+      # Docker 命令（docker / nerdctl / podman）
+      # Rancher Desktop 开启 moby 容器引擎后直接用 docker
+      command: docker
+      # Docker 不可用时是否跳过该阶段（true=跳过并继续, false=标记构建失败）
+      skip-if-unavailable: true
+    # K8s 部署配置
+    k8s:
+      # 是否启用 K8s 集成（false 时跳过连接检测）
+      enabled: true
+      # 部署命名空间
+      namespace: devops
+      # kubectl 不可用时是否跳过该阶段（true=跳过并继续, false=标记构建失败）
+      skip-if-unavailable: true
+      # kubeconfig 文件路径（留空则自动搜索: KUBECONFIG环境变量 > ~/.kube/config > ~/.rancher/kube/config）
+      # Windows Rancher 用户: 从 Rancher UI 下载 kubeconfig 放到 C:\Users\<用户名>\.kube\config 即可
+      kubeconfig-path:
+    # 单步执行超时时间（毫秒，默认 10 分钟）
+    timeout-ms: 600000
+  # 工具链管理 (语言能力检测 + 缺失工具下载)
+  toolchain:
+    # 工具安装目录 (相对项目根)
+    # 下载的工具解压到此目录即被平台自动识别 (与 ./tools/trivy 同一约定), 无需修改系统 PATH
+    dir: ./tools
+    # 单个工具下载超时 (秒, 默认 30 分钟 — MinGW 等安装包体积较大)
+    download-timeout-seconds: 1800
+  # 安全扫描 (Trivy) 配置
+  security:
+    # Trivy 可执行文件路径 (跨平台自适应)
+    # Linux/Mac: ./tools/trivy  (目录, 内含 trivy 可执行文件, 需 chmod +x)
+    # Windows:   ./tools/trivy  (目录, 内含 trivy.exe, 后端会自动补 .exe)
+    # 绝对路径也支持, 留空则走系统 PATH
+    trivy-path: ./tools/trivy
+    # Semgrep 可执行文件路径 (SAST 静态代码分析)
+    # 不可用时自动降级到内置模式扫描器 (零依赖)
+    # 安装: pip install semgrep
+    semgrep-path: semgrep
+    # 单次扫描超时（秒）
+    timeout-seconds: 300
+    # 重新扫描时是否清空上次漏洞
+    db-cleanup-on-rescan: true
+    # 漏洞库策略: 默认跳过在线更新, 直接使用本地缓存库 (扫描快且不依赖外网)
+    # 通过「安全扫描」页面的「更新漏洞库」按钮手动刷新
+    skip-db-update: true
+    # 漏洞库源地址 (可替换为国内镜像或私有 Registry, 例如:
+    #   阿里云镜像: registry.cn-hangzhou.aliyuncs.com/xxx/trivy-db )
+    db-repository: ghcr.io/aquasecurity/trivy-db
+    java-db-repository: ghcr.io/aquasecurity/trivy-java-db
+    # 手动更新漏洞库的超时时间 (下载量大, 默认 15 分钟)
+    db-update-timeout-seconds: 900
+    encryption-key: ""
+  # JWT
+  jwt:
+    secret: ZGV2b3BzLXBsYXRmb3JtLWp3dC1zZWNyZXQta2V5LTIwMjYtMDEtMDEtc3VwZXItc2VjdXJl
+    expiration: 86400000  # 24 小时（毫秒）
+
+  # 质量门禁配置
+  quality-gate:
+    min-pass-rate: 80.0    # 最低测试通过率 (%)
+    min-coverage: 60.0     # 最低代码覆盖率 (%)
+
+  # 安全
+
+
+  # 数据库备份
+  backup:
+    dir: ./data/backups          # 备份文件存储目录
+    mysqldump-path: mysqldump    # mysqldump 可执行文件 (Windows 自动补 .exe)
+
+  # 入向 Webhook 签名校验 (共享密钥, 留空则跳过校验)
+  webhook:
+    inbound-secret: ""
+
+  # 默认登录
+  admin:
+    default-username: admin
+    default-password: admin123
+    default-email: admin@devops.local

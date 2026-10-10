@@ -1,0 +1,182 @@
+package com.devops.platform.controller;
+
+import com.devops.platform.config.JwtUtil;
+import com.devops.platform.dto.AuthResponse;
+import com.devops.platform.dto.LoginRequest;
+import com.devops.platform.dto.RegisterRequest;
+import com.devops.platform.entity.User;
+import com.devops.platform.repository.UserRepository;
+import com.devops.platform.service.LoginTokenService;
+import com.devops.platform.service.UserService;
+import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Valid;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/auth")
+public class AuthController {
+
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final JwtUtil jwtUtil;
+    private final UserService userService;
+    private final LoginTokenService loginTokenService;
+
+    public AuthController(UserRepository userRepository,
+                          PasswordEncoder passwordEncoder,
+                          JwtUtil jwtUtil,
+                          UserService userService,
+                          LoginTokenService loginTokenService) {
+        this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.jwtUtil = jwtUtil;
+        this.userService = userService;
+        this.loginTokenService = loginTokenService;
+    }
+
+    /**
+     * 获取一次性登录令牌（仅前端可用）
+     */
+    @GetMapping("/login-token")
+    public ResponseEntity<?> getLoginToken() {
+        String token = loginTokenService.generate();
+        return ResponseEntity.ok(Map.of("token", token));
+    }
+
+    /**
+     * 用户登录（需携带 X-Login-Token 头，防止非前端直调）
+     * JWT 同时通过响应体返回和 HttpOnly Cookie 设置
+     */
+    @PostMapping("/login")
+    public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request,
+                                   @RequestHeader(value = "X-Login-Token", required = false) String loginToken,
+                                   HttpServletResponse response) {
+        // 一次性登录令牌校验 —— 阻止 curl/Postman 等直接调用
+        if (!loginTokenService.validateAndConsume(loginToken)) {
+            return ResponseEntity.status(403).body(Map.of(
+                "error", "请通过前端页面登录",
+                "detail", "缺少或无效的一次性登录令牌"
+            ));
+        }
+        // 大小写不敏感查找
+        User user = userRepository.findByUsernameIgnoreCase(request.getUsername())
+                .orElseThrow(() -> new BadCredentialsException("用户名或密码错误"));
+
+        if (!user.getEnabled()) {
+            return ResponseEntity.status(403).body(Map.of("error", "账号已被禁用，请联系管理员"));
+        }
+
+        if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+            throw new BadCredentialsException("用户名或密码错误");
+        }
+
+        String token = jwtUtil.generateToken(user.getUsername(), user.getRole());
+
+        // 设置 HttpOnly Secure SameSite Cookie
+        setTokenCookie(response, token);
+
+        return ResponseEntity.ok(AuthResponse.builder()
+                .token(token)
+                .tokenType("Bearer")
+                .userId(user.getId())
+                .username(user.getUsername())
+                .realName(user.getRealName())
+                .email(user.getEmail())
+                .role(user.getRole())
+                .build());
+    }
+
+    /**
+     * 登出 — 清除 token cookie
+     */
+    @PostMapping("/logout")
+    public ResponseEntity<?> logout(HttpServletResponse response) {
+        Cookie cookie = new Cookie("devops_token", "");
+        cookie.setHttpOnly(true);
+        cookie.setSecure(false); // 开发环境无 HTTPS
+        cookie.setPath("/");
+        cookie.setMaxAge(0);
+        cookie.setAttribute("SameSite", "Strict");
+        response.addCookie(cookie);
+        return ResponseEntity.ok(Map.of("success", true, "message", "已登出"));
+    }
+
+    /**
+     * 用户注册
+     */
+    @PostMapping("/register")
+    public ResponseEntity<?> register(@Valid @RequestBody RegisterRequest request,
+                                      HttpServletResponse response) {
+        if (userRepository.existsByUsernameIgnoreCase(request.getUsername())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "用户名已存在"));
+        }
+
+        User user = new User();
+        user.setUsername(request.getUsername());
+        user.setPassword(request.getPassword()); // UserService will encode
+        user.setEmail(request.getEmail());
+        user.setRealName(request.getRealName());
+        user.setRole("DEVELOPER"); // 新注册默认开发者角色
+
+        User saved = userService.createUser(user);
+
+        String token = jwtUtil.generateToken(saved.getUsername(), saved.getRole());
+
+        // 设置 HttpOnly Secure SameSite Cookie
+        setTokenCookie(response, token);
+
+        return ResponseEntity.ok(AuthResponse.builder()
+                .token(token)
+                .tokenType("Bearer")
+                .userId(saved.getId())
+                .username(saved.getUsername())
+                .realName(saved.getRealName())
+                .email(saved.getEmail())
+                .role(saved.getRole())
+                .build());
+    }
+
+    /** 设置 JWT HttpOnly Cookie */
+    private void setTokenCookie(HttpServletResponse response, String token) {
+        Cookie cookie = new Cookie("devops_token", token);
+        cookie.setHttpOnly(true);      // JS 不可读取，防 XSS
+        cookie.setSecure(false);       // 生产环境应为 true (HTTPS)
+        cookie.setPath("/");
+        cookie.setMaxAge(86400);       // 24 小时
+        cookie.setAttribute("SameSite", "Strict");  // 防 CSRF
+        response.addCookie(cookie);
+    }
+
+    /**
+     * 获取当前登录用户信息
+     */
+    @GetMapping("/me")
+    public ResponseEntity<?> getCurrentUser() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !auth.isAuthenticated() || "anonymousUser".equals(auth.getName())) {
+            return ResponseEntity.status(401).body(Map.of("error", "未登录"));
+        }
+
+        User user = userRepository.findByUsernameIgnoreCase(auth.getName()).orElse(null);
+        if (user == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "用户不存在"));
+        }
+
+        return ResponseEntity.ok(AuthResponse.builder()
+                .userId(user.getId())
+                .username(user.getUsername())
+                .realName(user.getRealName())
+                .email(user.getEmail())
+                .role(user.getRole())
+                .build());
+    }
+}
