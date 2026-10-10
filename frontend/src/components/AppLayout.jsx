@@ -38,6 +38,7 @@ const menuGroups = [
       { path: '/artifacts', label: '制品版本', icon: '📦', minRole: 'DEVELOPER' },
       { path: '/iac', label: '环境 IaC', icon: '🌐', minRole: 'DEVELOPER' },
       { path: '/webhooks', label: 'Webhook 订阅', icon: '🔔', minRole: 'DEVELOPER' },
+      { path: '/advanced', label: '高级功能', icon: '🧩', minRole: 'DEVELOPER' },
     ],
   },
 

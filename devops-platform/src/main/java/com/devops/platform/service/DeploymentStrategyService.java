@@ -7,6 +7,8 @@ import org.springframework.stereotype.Service;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -193,6 +195,101 @@ public class DeploymentStrategyService {
         }
     }
 
+    // ==================== 金丝雀闭环：状态查询 / 全量提升 / 回滚 ====================
+
+    /**
+     * 查询项目当前是否存在金丝雀部署。
+     * canary Deployment 命名规则（见 deployCanary）= appName + "-canary"，
+     * appName 可能是「项目编码」或「项目编码-流水线名」，所以按前缀 + 后缀匹配，
+     * 不假设具体命名。
+     *
+     * @return {exists, canaryName, stableName, replicas, readyReplicas, image}
+     */
+    public Map<String, Object> canaryStatus(String namespace, String codePrefix) {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("exists", false);
+        try {
+            String out = kubectlQuery("kubectl", "get", "deploy", "-n", namespace, "-o",
+                    "jsonpath={range .items[*]}{.metadata.name}|{.spec.replicas}|{.status.readyReplicas}|{.spec.template.spec.containers[0].image}{'\\n'}{end}");
+            for (String line : out.split("\\R")) {
+                String[] parts = line.split("\\|");
+                if (parts.length < 4) continue;
+                String name = parts[0].trim();
+                if (!name.endsWith("-canary")) continue;
+                if (codePrefix != null && !codePrefix.isBlank() && !name.startsWith(codePrefix)) continue;
+                r.put("exists", true);
+                r.put("canaryName", name);
+                r.put("stableName", name.substring(0, name.length() - "-canary".length()));
+                r.put("replicas", parts[1].trim());
+                r.put("readyReplicas", parts[2].trim().isEmpty() ? "0" : parts[2].trim());
+                r.put("image", parts[3].trim());
+                return r;
+            }
+        } catch (Exception e) {
+            r.put("error", "查询金丝雀状态失败: " + e.getMessage());
+        }
+        return r;
+    }
+
+    /**
+     * 金丝雀全量提升：把 stable Deployment 的镜像替换为 canary 镜像，
+     * 等 stable rollout 完成后删除 canary Deployment。
+     */
+    public boolean promoteCanary(String namespace, String canaryName, String stableName, StringBuilder logBuf) {
+        logBuf.append("[CANARY] 全量提升金丝雀版本\n");
+        try {
+            String image = kubectlQuery("kubectl", "get", "deploy", canaryName, "-n", namespace,
+                    "-o", "jsonpath={.spec.template.spec.containers[0].image}").trim();
+            if (image.isBlank()) {
+                logBuf.append("[CANARY] 拿不到金丝雀镜像，无法提升\n");
+                return false;
+            }
+            String container = kubectlQuery("kubectl", "get", "deploy", stableName, "-n", namespace,
+                    "-o", "jsonpath={.spec.template.spec.containers[0].name}").trim();
+            logBuf.append("[CANARY] 金丝雀镜像: ").append(image).append("\n");
+            logBuf.append("[CANARY] 将稳定版 ").append(stableName).append(" 更新为该镜像...\n");
+            if (!executeKubectl(null, "kubectl set image deployment/" + stableName
+                    + " " + container + "=" + image + " -n " + namespace, logBuf)) {
+                logBuf.append("[CANARY] 更新稳定版镜像失败\n");
+                return false;
+            }
+            logBuf.append("[CANARY] 等待稳定版 rollout 完成...\n");
+            if (!waitForRollout(namespace, stableName, 120, logBuf)) {
+                logBuf.append("[CANARY] 稳定版 rollout 未完成，已保留金丝雀便于排查\n");
+                return false;
+            }
+            logBuf.append("[CANARY] 删除金丝雀 Deployment...\n");
+            executeKubectl(null, "kubectl delete deployment " + canaryName + " -n " + namespace, logBuf);
+            logBuf.append("[CANARY] ✓ 全量提升完成，全部流量已切换到新版本\n");
+            return true;
+        } catch (Exception e) {
+            logBuf.append("[CANARY] 全量提升异常: ").append(e.getMessage()).append("\n");
+            return false;
+        }
+    }
+
+    /** 金丝雀回滚：直接删除 canary Deployment，流量自然回落到 stable */
+    public boolean rollbackCanaryDeployment(String namespace, String canaryName, StringBuilder logBuf) {
+        logBuf.append("[CANARY] 回滚金丝雀：删除 ").append(canaryName).append("，流量回落稳定版\n");
+        boolean ok = executeKubectl(null, "kubectl delete deployment " + canaryName + " -n " + namespace, logBuf);
+        logBuf.append(ok ? "[CANARY] ✓ 回滚完成\n" : "[CANARY] 回滚失败\n");
+        return ok;
+    }
+
+    /** 执行 kubectl 查询并返回 stdout（失败返回空串），用于 jsonpath 取值 */
+    private String kubectlQuery(String... args) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(args);
+            pb.redirectErrorStream(true);
+            Process proc = pb.start();
+            String output = new String(proc.getInputStream().readAllBytes());
+            proc.waitFor(15, TimeUnit.SECONDS);
+            return proc.exitValue() == 0 ? output : "";
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     /** 查询当前蓝绿哪个槽位是活跃的 */
     private String queryActiveSlot(String namespace, String appName) {
         try {
@@ -229,11 +326,13 @@ public class DeploymentStrategyService {
         }
     }
 
-    /** 执行 kubectl 命令（cmd.exe） */
+    /** 执行 kubectl 命令（cmd.exe）；workDir 传 null 表示不限定工作目录 */
     private boolean executeKubectl(String workDir, String command, StringBuilder logBuf) {
         try {
             ProcessBuilder pb = new ProcessBuilder("cmd.exe", "/c", command);
-            pb.directory(new File(workDir));
+            if (workDir != null) {
+                pb.directory(new File(workDir));
+            }
             pb.redirectErrorStream(true);
             Process proc = pb.start();
             String output = new String(proc.getInputStream().readAllBytes());

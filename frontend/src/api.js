@@ -78,15 +78,6 @@ async function request(url, options = {}) {
   return res.text()
 }
 
-// ==================== Auth ====================
-export const loginApi = (credentials) =>
-  request('/auth/login', { method: 'POST', body: JSON.stringify(credentials) })
-
-export const registerApi = (data) =>
-  request('/auth/register', { method: 'POST', body: JSON.stringify(data) })
-
-export const fetchMe = () => request('/auth/me')
-
 // ==================== Dashboard ====================
 export const fetchDashboardStats = () => request('/dashboard/stats')
 export const fetchDashboardTrend = () => request('/dashboard/trends')
@@ -98,12 +89,10 @@ export const fetchProject = (id) => request(`/projects/${id}`)
 export const createProject = (data) => request('/projects', { method: 'POST', body: JSON.stringify(data) })
 export const updateProject = (id, data) => request(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) })
 export const deleteProject = (id) => request(`/projects/${id}`, { method: 'DELETE' })
-// token 可选：不传则后端用项目里已保存的 GitHub 凭证；传了则以请求头为准（页面上的「临时 Token」）
-export const previewProjectCode = (id, token) =>
-  request(`/projects/${id}/preview`, { headers: token ? { 'X-Git-Token': token } : {} })
-export const previewProjectFile = (id, filePath, token) =>
-  request(`/projects/${id}/preview/file?path=${encodeURIComponent(filePath)}`,
-    { headers: token ? { 'X-Git-Token': token } : {} })
+// 凭证统一由后端取用（项目里「Git 凭证」保存的 PAT，自动解密使用）；公开仓库无需任何凭证
+export const previewProjectCode = (id) => request(`/projects/${id}/preview`)
+export const previewProjectFile = (id, filePath) =>
+  request(`/projects/${id}/preview/file?path=${encodeURIComponent(filePath)}`)
 // 已部署项目是否有远端新提交（refresh=true 跳过后端 5 分钟缓存）
 export const fetchProjectUpdateStatus = (refresh = false) =>
   request(`/projects/update-status${refresh ? '?refresh=true' : ''}`, { timeout: 60000 })
@@ -141,16 +130,6 @@ export const deleteBuild = (id) => request(`/builds/${id}`, { method: 'DELETE' }
 export const retryBuild = (id) => request(`/builds/${id}/retry`, { method: 'POST' })
 export const approveStep = (id) => request(`/builds/${id}/approve-step`, { method: 'POST' })
 export const rejectStep = (id, reason) => request(`/builds/${id}/reject-step`, { method: 'POST', body: JSON.stringify({ reason }) })
-export const fetchPipelineVersions = (id) => request(`/pipelines/${id}/versions`)
-export const fetchVariables = (projectId, pipelineId) => {
-  const params = new URLSearchParams()
-  if (projectId) params.set('projectId', projectId)
-  if (pipelineId) params.set('pipelineId', pipelineId)
-  return request(`/variables?${params}`)
-}
-export const createVariable = (data) => request('/variables', { method: 'POST', body: JSON.stringify(data) })
-export const updateVariable = (id, data) => request(`/variables/${id}`, { method: 'PUT', body: JSON.stringify(data) })
-export const deleteVariable = (id) => request(`/variables/${id}`, { method: 'DELETE' })
 export const checkWorkspace = (projectId) => request(`/builds/workspace-check?projectId=${projectId}`)
 
 // ==================== Environments ====================
@@ -190,10 +169,27 @@ export const rollbackDeploy = (historyId) =>
   request(`/deployments/rollback/${historyId}`, { method: 'POST' })
 export const deleteDeploymentHistory = (id) => request(`/deployments/history/${id}`, { method: 'DELETE' })
 export const deleteDeploymentRequest = (id) => request(`/deployments/request/${id}`, { method: 'DELETE' })
-export const promoteCanary = (projectId, fullReplicas) =>
-  request(`/instances/canary-promote?projectId=${projectId}&replicas=${fullReplicas}`, { method: 'POST', timeout: 180000 })
-export const rollbackCanary = (projectId) =>
-  request(`/instances/canary-rollback?projectId=${projectId}`, { method: 'POST' })
+
+// 金丝雀发布闭环：状态查询 / 全量提升 / 回滚（后端 DeploymentController）
+export const fetchCanaryStatus = (projectId) => request(`/deployments/canary-status?projectId=${projectId}`)
+export const promoteCanary = (projectId) => request(`/deployments/canary-promote?projectId=${projectId}`, { method: 'POST', timeout: 180000 })
+export const rollbackCanary = (projectId) => request(`/deployments/canary-rollback?projectId=${projectId}`, { method: 'POST', timeout: 60000 })
+
+// 流水线版本历史与回滚
+export const fetchPipelineVersions = (id) => request(`/pipelines/${id}/versions`)
+export const rollbackPipelineVersion = (id, versionId) =>
+  request(`/pipelines/${id}/rollback-version`, { method: 'POST', body: JSON.stringify({ versionId }) })
+
+// 构建变量（项目级/流水线级环境变量，secret 变量后端 AES-GCM 加密存储）
+export const fetchVariables = (projectId, pipelineId) => {
+  const params = new URLSearchParams()
+  if (projectId) params.set('projectId', projectId)
+  if (pipelineId) params.set('pipelineId', pipelineId)
+  return request(`/variables?${params}`)
+}
+export const createVariable = (data) => request('/variables', { method: 'POST', body: JSON.stringify(data) })
+export const updateVariable = (id, data) => request(`/variables/${id}`, { method: 'PUT', body: JSON.stringify(data) })
+export const deleteVariable = (id) => request(`/variables/${id}`, { method: 'DELETE' })
 
 // ==================== Notifications ====================
 export const fetchNotifications = () => request('/notifications')
@@ -210,11 +206,8 @@ export const deleteArtifact = (id) => request(`/artifacts/${id}`, { method: 'DEL
 // ==================== Instances ====================
 export const fetchInstances = () => request('/instances')
 export const fetchInstanceStats = () => request('/instances/stats')
-export const fetchProjectInstances = (projectId) => request(`/instances/project/${projectId}`)
-export const updateInstanceHealth = (id, data) => request(`/instances/${id}/health`, { method: 'PUT', body: JSON.stringify(data) })
 export const fetchK8sStatus = () => request('/instances/k8s-status')
 export const reconnectK8s = () => request('/instances/k8s-reconnect', { method: 'POST' })
-export const fetchK8sNamespaces = () => request('/instances/k8s-namespaces')
 export const restartInstance = (id) => request(`/instances/${id}/restart`, { method: 'POST' })
 export const stopInstance = (id) => request(`/instances/${id}/stop`, { method: 'POST' })
 export const startInstance = (id) => request(`/instances/${id}/start`, { method: 'POST' })
@@ -237,7 +230,6 @@ export const deleteK8sDeployment = (name, namespace = 'devops') => request(`/ins
 
 // ==================== Templates ====================
 export const fetchTemplates = (type) => request(`/templates${type ? '?type=' + type : ''}`)
-export const fetchBuiltinTemplates = () => request('/templates/builtin')
 export const searchTemplates = (keyword) => request(`/templates/search?keyword=${encodeURIComponent(keyword)}`)
 export const createTemplate = (data) => request('/templates', { method: 'POST', body: JSON.stringify(data) })
 export const updateTemplate = (id, data) => request(`/templates/${id}`, { method: 'PUT', body: JSON.stringify(data) })
@@ -267,10 +259,8 @@ export const updateVulnDb = (includeJavaDb = true) =>
     timeout: 900000  // 漏洞库下载量大, 最长等 15 分钟
   })
 export const fetchSecurityReportsByProject = (projectId) => request(`/security/reports/project/${projectId}`)
-export const fetchSecurityReportsByBuild = (buildId) => request(`/security/reports/build/${buildId}`)
 export const fetchSecurityReport = (id) => request(`/security/reports/${id}`)
 export const fetchSecurityVulnsByReport = (reportId) => request(`/security/vulnerabilities/${reportId}`)
-export const fetchSecurityVulnsByProject = (projectId) => request(`/security/vulnerabilities/project/${projectId}`)
 export const updateSecurityVulnStatus = (id, status, note = '') =>
   request(`/security/vulnerabilities/${id}/status`, { method: 'PUT', body: JSON.stringify({ status, note }) })
 export const fetchSecurityStats = (projectId) => request(`/security/stats/project/${projectId}`)
@@ -291,7 +281,6 @@ export const fetchMetricsErrorPaths = (limit = 10, minutes = 60) =>
 
 // ==================== Artifact Version ====================
 export const fetchArtifactVersionsByProject = (projectId) => request(`/artifacts/versions/project/${projectId}`)
-export const fetchArtifactVersionsByArtifact = (artifactId) => request(`/artifacts/${artifactId}/versions`)
 export const verifyArtifactVersion = (versionId) => request(`/artifacts/versions/${versionId}/verify`)
 export const markArtifactVersionDeployed = (versionId) =>
   request(`/artifacts/versions/${versionId}/deployed`, { method: 'POST' })
@@ -299,7 +288,6 @@ export const deleteArtifactVersion = (versionId) => request(`/artifacts/versions
 
 // ==================== Environment Templates (IaC) ====================
 export const fetchEnvTemplates = () => request('/environments/templates')
-export const fetchBuiltinEnvTemplates = () => request('/environments/templates/builtin')
 export const cloneEnvFromTemplate = (templateId, projectCode, projectId, nameOverride) =>
   request('/environments/clone-from-template', {
     method: 'POST',
@@ -312,7 +300,6 @@ export const fetchEnvQuotaYaml = (id) => request(`/environments/${id}/yaml/quota
 
 // ==================== Webhook Subscriptions ====================
 export const fetchWebhooks = () => request('/webhooks/subscriptions')
-export const fetchActiveWebhooks = () => request('/webhooks/subscriptions/active')
 export const createWebhook = (sub) => request('/webhooks/subscriptions', { method: 'POST', body: JSON.stringify(sub) })
 export const updateWebhook = (id, sub) => request(`/webhooks/subscriptions/${id}`, { method: 'PUT', body: JSON.stringify(sub) })
 export const deleteWebhook = (id) => request(`/webhooks/subscriptions/${id}`, { method: 'DELETE' })
@@ -336,22 +323,15 @@ export const fetchTestReport = (id) => request(`/test-reports/${id}`)
 export const fetchProjectAvgCoverage = (projectId) => request(`/test-reports/project/${projectId}/avg-coverage`)
 
 // ==================== Git Integration ====================
-export const fetchGitRepoInfo = (projectId, token) =>
-  request(`/git/${projectId}/info`, { headers: token ? { 'X-Git-Token': token } : {} })
-export const fetchGitBranches = (projectId, token) =>
-  request(`/git/${projectId}/branches`, { headers: token ? { 'X-Git-Token': token } : {} })
-export const fetchGitCommits = (projectId, branch, limit, token) =>
-  request(`/git/${projectId}/commits?branch=${encodeURIComponent(branch)}&limit=${limit || 20}`,
-    { headers: token ? { 'X-Git-Token': token } : {} })
-export const fetchGitMRs = (projectId, state, token) =>
-  request(`/git/${projectId}/merge-requests?state=${state || 'open'}`,
-    { headers: token ? { 'X-Git-Token': token } : {} })
-export const createGitMR = (projectId, body, token) =>
-  request(`/git/${projectId}/merge-requests`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-    headers: token ? { 'X-Git-Token': token, 'Content-Type': 'application/json' } : {}
-  })
+// 统一约定：前端不传 token；后端按「项目里保存的 PAT」自动取用，公开仓库匿名可读
+export const fetchGitRepoInfo = (projectId) => request(`/git/${projectId}/info`)
+export const fetchGitBranches = (projectId) => request(`/git/${projectId}/branches`)
+export const fetchGitCommits = (projectId, branch, limit) =>
+  request(`/git/${projectId}/commits?branch=${encodeURIComponent(branch)}&limit=${limit || 20}`)
+export const fetchGitMRs = (projectId, state) =>
+  request(`/git/${projectId}/merge-requests?state=${state || 'open'}`)
+export const createGitMR = (projectId, body) =>
+  request(`/git/${projectId}/merge-requests`, { method: 'POST', body: JSON.stringify(body) })
 
 // ==================== GitHub Actions / Release ====================
 export const fetchGitConfig = (projectId) => request(`/git/${projectId}/config`)

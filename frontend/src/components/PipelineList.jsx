@@ -5,6 +5,8 @@ import { fetchPipelines, createPipeline, updatePipeline, deletePipeline, fetchPr
 import { emit, useResourceEvent } from '../eventBus'
 import { useBuildWatch } from '../useBuildWatch'
 import SchedulerList from './SchedulerList'
+import VariablesPanel from './VariablesPanel'
+import PipelineVersionsModal from './PipelineVersionsModal'
 import { hasCapability, parseCapabilities, describeCapabilities, CAPABILITY_ORDER, CAPABILITY_LABEL } from '../capabilities'
 import { templateFitsLanguage } from '../templateMatch'
 
@@ -119,6 +121,8 @@ export default function PipelineList() {
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState(null)
+  const [varsPipeline, setVarsPipeline] = useState(null)       // 构建变量弹窗：当前流水线
+  const [versionsPipeline, setVersionsPipeline] = useState(null) // 版本历史弹窗：当前流水线
   const [form, setForm] = useState(DEFAULT_FORM)
   const [search, setSearch] = useState('')
   const [toast, setToast] = useState(null) // { text, type: 'info'|'error' }
@@ -481,6 +485,8 @@ export default function PipelineList() {
                       <td>
                         <div className="btn-group">
                           {canTrigger && <button className="btn btn-success btn-sm" onClick={() => handleTrigger(p, p.projectId)}>▶ 执行</button>}
+                          {canManage && <button className="btn btn-outline btn-sm" title="构建变量" onClick={() => setVarsPipeline(p)}>🔐</button>}
+                          <button className="btn btn-outline btn-sm" title="版本历史" onClick={() => setVersionsPipeline(p)}>🕘</button>
                           {canManage && <button className="btn btn-outline btn-sm" onClick={() => openEdit(p)}>✏️</button>}
                           {canManage && <button className="btn btn-danger btn-sm" onClick={() => handleDelete(p)}>🗑</button>}
                         </div>
@@ -727,6 +733,20 @@ export default function PipelineList() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 构建变量弹窗 */}
+      {varsPipeline && (
+        <VariablesPanel pipeline={varsPipeline} onClose={() => setVarsPipeline(null)} />
+      )}
+
+      {/* 版本历史弹窗 */}
+      {versionsPipeline && (
+        <PipelineVersionsModal
+          pipeline={versionsPipeline}
+          onClose={() => setVersionsPipeline(null)}
+          onRollback={load}
+        />
       )}
 
       {/* Toast notification */}

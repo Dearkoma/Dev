@@ -23,6 +23,20 @@ public class BuildVariableService {
         return variableRepository.findByProjectIdOrPipelineIdOrderByPipelineIdAsc(projectId, pipelineId);
     }
 
+    /**
+     * 仅按项目查询（前端列表用）。
+     * 不能用 findByProjectIdOrPipelineId(pid, null)：pipelineId 为 null 时 OR 条件变成
+     * pipeline_id IS NULL，会把「所有项目的项目级变量」一起带出来（跨项目泄露）。
+     * 约定：流水线级变量创建时 projectId 也必须写入，因此 findByProjectId 可覆盖全部。
+     */
+    public List<BuildVariable> getVariablesByProject(Long projectId) {
+        return variableRepository.findByProjectId(projectId);
+    }
+
+    public BuildVariable getById(Long id) {
+        return variableRepository.findById(id).orElse(null);
+    }
+
     /** 解析所有变量为 Map（key→明文value），流水线级覆盖项目级 */
     public Map<String, String> resolveAll(Long projectId, Long pipelineId) {
         List<BuildVariable> vars = getVariables(projectId, pipelineId);

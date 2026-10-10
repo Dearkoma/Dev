@@ -16,12 +16,23 @@ public class ProjectService {
         if (project.getCode() == null || project.getCode().isEmpty()) {
             project.setCode("proj-" + System.currentTimeMillis());
         }
+        // code 列有唯一约束，重复时 save 会裸抛 DataIntegrityViolationException → 前端只见 500，
+        // 这里前置校验给出可读信息（GlobalExceptionHandler 统一转 400）
+        if (projectRepository.existsByCode(project.getCode())) {
+            throw new IllegalArgumentException("项目编码「" + project.getCode() + "」已存在，请换一个编码");
+        }
         project.setCapabilities(ToolchainService.normalizeCapabilities(project.getCapabilities()));
         return projectRepository.save(project);
     }
     public Project updateProject(Long id, Project project) {
         Project existing = getProject(id);
         if (existing == null) return null;
+        // 编辑同样可能把 code 改成与别的项目重复（排除自身）
+        if (project.getCode() != null && !project.getCode().isEmpty()
+                && !project.getCode().equals(existing.getCode())
+                && projectRepository.existsByCodeAndIdNot(project.getCode(), id)) {
+            throw new IllegalArgumentException("项目编码「" + project.getCode() + "」已被其他项目使用，请换一个编码");
+        }
         existing.setName(project.getName());
         existing.setCode(project.getCode());
         existing.setDescription(project.getDescription());

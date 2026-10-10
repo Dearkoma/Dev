@@ -9,6 +9,7 @@ import java.util.List;
 public class PipelineService {
     private final PipelineRepository pipelineRepository;
     private final com.devops.platform.repository.PipelineVersionRepository versionRepository;
+    private final ProjectAccessService accessService;
     public List<Pipeline> getPipelinesByProject(Long projectId) {
         return pipelineRepository.findByProjectIdOrderByCreatedAtDesc(projectId);
     }
@@ -40,7 +41,9 @@ public class PipelineService {
             version.setPipelineId(id);
             version.setVersionNumber((int) (versionRepository.countByPipelineId(id) + 1));
             version.setDefinition(existing.getDefinition());
-            version.setChangedBy("admin"); // TODO: 从 JWT 获取用户名
+            // 变更人取当前登录用户；无 SecurityContext（防御：将来若被定时任务调用）兜底 system
+            String username = accessService.currentUsername();
+            version.setChangedBy(username != null ? username : "system");
             versionRepository.save(version);
         }
 
@@ -61,5 +64,21 @@ public class PipelineService {
     }
     public List<com.devops.platform.entity.PipelineVersion> getVersionHistory(Long pipelineId) {
         return versionRepository.findByPipelineIdOrderByVersionNumberDesc(pipelineId);
+    }
+
+    /**
+     * 回滚流水线到指定历史版本。
+     * 实现上复用 updatePipeline：把旧 definition 写回，updatePipeline 会把「回滚前的当前定义」
+     * 再存一个版本快照 —— 回滚操作自身也留下审计记录，不会丢历史。
+     */
+    public Pipeline rollbackToVersion(Long pipelineId, Long versionId) {
+        Pipeline pipeline = getPipeline(pipelineId);
+        if (pipeline == null) return null;
+        var version = versionRepository.findById(versionId).orElse(null);
+        if (version == null || !pipelineId.equals(version.getPipelineId())) {
+            throw new IllegalArgumentException("版本不存在或不属于该流水线");
+        }
+        pipeline.setDefinition(version.getDefinition());
+        return updatePipeline(pipelineId, pipeline);
     }
 }

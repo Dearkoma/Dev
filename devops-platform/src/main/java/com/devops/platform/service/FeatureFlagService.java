@@ -108,7 +108,7 @@ public class FeatureFlagService {
         for (FeatureFlag flag : flags) {
             result.put(flag.getKey(), Map.of(
                     "enabled", evaluate(flag, username),
-                    "flagType", flag.getFlagType(),
+                    "flagType", flag.getFlagType() != null ? flag.getFlagType() : "BOOLEAN",
                     "rolloutPercent", flag.getRolloutPercent() != null ? flag.getRolloutPercent() : 0
             ));
         }

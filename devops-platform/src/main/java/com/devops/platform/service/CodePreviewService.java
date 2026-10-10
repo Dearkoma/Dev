@@ -43,11 +43,27 @@ public class CodePreviewService {
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
+    private static final String GITHUB_API_BASE = "https://api.github.com";
+    private static final String GITEE_API_BASE = "https://gitee.com/api/v5";
+
     // ---- 临时克隆缓存（仅非 GitHub/Gitee 仓库使用） ----
     private final Map<Long, TempClone> cloneCache = new ConcurrentHashMap<>();
     private static final long CLONE_TTL_MS = 30 * 60 * 1000; // 30 分钟
 
+    /**
+     * 分支解析缓存。Gitee 匿名调用按 IP 限流 **60 次/小时**，而 {@code resolveBranch}
+     * 每次最多要打 2 个接口；不做缓存的话「预览一次 = 3 次调用、点开一个文件 = 3 次调用」，
+     * 点十几个文件就把整点额度烧光了。缓存后：预览一次只花 1 次调用。
+     * key = apiBase|owner/repo|配置分支
+     */
+    private final Map<String, BranchCache> branchCache = new ConcurrentHashMap<>();
+    private static final long BRANCH_TTL_MS = 30 * 60 * 1000; // 30 分钟
+
     private static final int MAX_FILE_SIZE = 500 * 1024;
+
+    /** 平台 API 配额（用于提示文案）：Gitee 未认证 60 次/小时/IP，认证后 5000 次/小时 */
+    private static final String QUOTA_ANON = "60";
+    private static final String QUOTA_AUTH = "5000";
 
     private static final Set<String> SKIP_DIRS = Set.of(
             ".git", "node_modules", "target", "__pycache__",
@@ -86,8 +102,8 @@ public class CodePreviewService {
 
         try {
             return switch (info.platform) {
-                case "github" -> buildTreeFromGitHub(info, "https://api.github.com", token);
-                case "gitee"  -> buildTreeFromGitHub(info, "https://gitee.com/api/v5", token);
+                case "github" -> buildTreeFromGitHub(info, GITHUB_API_BASE, token);
+                case "gitee"  -> buildGiteeTree(info, token);
                 default       -> buildTreeFromTempClone(projectId, info);
             };
         } catch (Exception e) {
@@ -129,8 +145,8 @@ public class CodePreviewService {
 
         try {
             return switch (info.platform) {
-                case "github" -> fetchFileViaApi(info, filePath, "https://api.github.com", token);
-                case "gitee"  -> fetchFileViaApi(info, filePath, "https://gitee.com/api/v5", token);
+                case "github" -> fetchFileViaApi(info, filePath, GITHUB_API_BASE, token);
+                case "gitee"  -> fetchGiteeFile(info, filePath, token);
                 default -> fetchFileFromClone(projectId, filePath);
             };
         } catch (Exception e) {
@@ -148,12 +164,12 @@ public class CodePreviewService {
         String url = apiBase + "/repos/" + info.owner + "/" + info.repo
                 + "/git/trees/" + branch + "?recursive=1";
         HttpResponse<String> resp = sendGet(url, token);
-        if (resp == null) throw new RuntimeException("网络异常，无法访问 " + platformOf(url) + " API");
+        if (resp == null) return error("网络异常，无法访问 " + platformOf(url) + " API（请检查本机网络或代理设置）");
 
         int code = resp.statusCode();
         // GitHub 对空仓库返回 409，视为「没有文件」而不是错误
         if (code == 409) return successTree(info.repo, List.of());
-        if (code != 200) throw new RuntimeException(apiError(url, code, token));
+        if (code != 200) return httpError(url, code, resp.body(), token);
 
         JsonNode body = om.readTree(resp.body());
         JsonNode tree = body.get("tree");
@@ -182,6 +198,62 @@ public class CodePreviewService {
         return successTree(info.repo, rootNode.childrenAsList());
     }
 
+    // ==================== Gitee 文件树（API 优先，限流时走网页接口兜底） ====================
+
+    /**
+     * Gitee 文件树。匿名调用 {@code /api/v5} 只有 60 次/小时，额度一满连公开仓库都读不了，
+     * 所以 API 拿不到时自动回落到网页端 file_list（不吃该配额）。
+     */
+    private Map<String, Object> buildGiteeTree(GitInfo info, String token) throws Exception {
+        Map<String, Object> api = buildTreeFromGitHub(info, GITEE_API_BASE, token);
+        if (!api.containsKey("error")) return api;
+
+        Map<String, Object> fallback = buildTreeFromGiteeFileList(info, token);
+        return fallback != null ? fallback : api;
+    }
+
+    /**
+     * 网页端 file_list（Gitee 站内「按文件名搜索」用的接口），返回该分支下**全部文件的平铺路径**，
+     * 不消耗 {@code /api/v5} 配额，因此是限流时唯一的活路。
+     * <p>
+     * 代价：拿不到目录项和文件大小 —— 中间目录由路径自动补齐，空目录不会出现。
+     *
+     * @return 成功返回文件树；仓库不可见 / 接口不可用返回 null（由调用方展示 API 的原始错误）
+     */
+    private Map<String, Object> buildTreeFromGiteeFileList(GitInfo info, String token) {
+        try {
+            String branch = resolveBranch(GITEE_API_BASE, info, token);
+            String url = "https://gitee.com/" + info.owner + "/" + info.repo
+                    + "/file_list?ref=" + URLEncoder.encode(branch, StandardCharsets.UTF_8) + "&path=/";
+
+            HttpResponse<String> resp = sendGet(url, token);
+            if (resp == null || resp.statusCode() != 200) return null;
+
+            JsonNode arr = om.readTree(resp.body());
+            // 私有仓库未授权时这里会返回登录页 HTML，不是数组 —— 直接判定为未命中
+            if (!arr.isArray() || arr.isEmpty()) return null;
+
+            TreeNode rootNode = new TreeNode(info.repo, "directory", "");
+            for (JsonNode item : arr) {
+                String path = item.asText();
+                if (path == null || path.isBlank()) continue;
+
+                String[] parts = path.split("/");
+                if (shouldSkip(parts)) continue;
+
+                String type = isBinaryByName(parts[parts.length - 1]) ? "binary" : "file";
+                rootNode.add(parts, 0, type, path, 0);
+            }
+
+            if (rootNode.children.isEmpty()) return null;
+            rootNode.sort();
+            return successTree(info.repo, rootNode.childrenAsList());
+        } catch (Exception e) {
+            log.debug("Gitee file_list 兜底未命中 {}/{}: {}", info.owner, info.repo, e.getMessage());
+            return null;
+        }
+    }
+
     // ==================== 文件内容获取（GitHub / Gitee 内容 API） ====================
 
     /**
@@ -197,11 +269,11 @@ public class CodePreviewService {
                 + "/contents/" + encodePath(filePath) + "?ref=" + branch;
 
         HttpResponse<String> resp = sendGet(url, token);
-        if (resp == null) return error("网络异常，无法访问 " + platformOf(url) + " API");
+        if (resp == null) return error("网络异常，无法访问 " + platformOf(url) + " API（请检查本机网络或代理设置）");
 
         int code = resp.statusCode();
         if (code != 200) {
-            return error(apiError(url, code, token));
+            return httpError(url, code, resp.body(), token);
         }
 
         JsonNode node = om.readTree(resp.body());
@@ -245,6 +317,65 @@ public class CodePreviewService {
         result.put("name", name);
         result.put("language", guessLanguage(name));
         return result;
+    }
+
+    /**
+     * Gitee 单文件获取。
+     * <p>
+     * Gitee 的 {@code /api/v5} 匿名调用按 IP 限流 60 次/小时，额度用完整个 API 全线 403
+     * （连读公开仓库都不行）。而网页 raw 端点走 CDN、**不消耗该配额**，所以匿名场景优先走 raw：
+     * 这样「展开一次文件树 = 1 次 API 调用」，之后点多少个文件都不再花额度。
+     * <p>
+     * 配了 PAT 时直接走 API（能读私有仓库，认证额度 5000 次/小时，不会成为瓶颈）。
+     */
+    private Map<String, Object> fetchGiteeFile(GitInfo info, String filePath, String token) throws Exception {
+        if (token != null && !token.isBlank()) {
+            return fetchFileViaApi(info, filePath, GITEE_API_BASE, token);
+        }
+        Map<String, Object> raw = fetchFileViaGiteeRaw(info, filePath, null);
+        // raw 未命中（目录 / 私有仓库 / 分支不对）时回落 API，好处是能拿到精确的错误原因
+        return raw != null ? raw : fetchFileViaApi(info, filePath, GITEE_API_BASE, null);
+    }
+
+    /**
+     * Gitee 网页 raw 端点直读文件内容（不吃 /api/v5 配额）。
+     *
+     * @return 命中返回文件内容；未命中返回 null，由调用方回落到 API
+     */
+    private Map<String, Object> fetchFileViaGiteeRaw(GitInfo info, String filePath, String token) {
+        try {
+            String branch = resolveBranch(GITEE_API_BASE, info, token);
+            String url = "https://gitee.com/" + info.owner + "/" + info.repo
+                    + "/raw/" + branch + "/" + encodePath(filePath);
+            if (token != null && !token.isBlank()) {
+                url += "?access_token=" + URLEncoder.encode(token, StandardCharsets.UTF_8);
+            }
+
+            HttpResponse<byte[]> resp = sendGetBytes(url, null);
+            if (resp == null || resp.statusCode() != 200) return null;
+
+            byte[] bytes = resp.body();
+            if (bytes == null || bytes.length == 0) return null;
+            if (bytes.length > MAX_FILE_SIZE) {
+                return error("文件过大（>" + (MAX_FILE_SIZE / 1024) + "KB），无法预览");
+            }
+
+            String name = lastSegment(filePath);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("content", new String(bytes, StandardCharsets.UTF_8));
+            result.put("path", filePath);
+            result.put("size", bytes.length);
+            result.put("name", name);
+            result.put("language", guessLanguage(name));
+            return result;
+        } catch (Exception e) {
+            log.debug("Gitee raw 未命中 {}/{}: {}", info.owner, filePath, e.getMessage());
+            return null;
+        }
+    }
+
+    private String lastSegment(String path) {
+        return path.contains("/") ? path.substring(path.lastIndexOf('/') + 1) : path;
     }
 
     /** 逐段编码路径，保留 `/` 分隔符 —— 否则路径里的空格、# 等字符会破坏 URL */
@@ -361,8 +492,24 @@ public class CodePreviewService {
         return null;
     }
 
-    /** 尝试确认分支存在，失败则回退到仓库默认分支 */
+    /**
+     * 解析分支（带缓存）。
+     * 命中缓存直接返回，避免每次「预览 / 打开文件」都多打 1~2 个接口 —— Gitee 匿名额度只有 60 次/小时。
+     * 解析失败也会被缓存（值回退为配置分支），否则限流期间每次请求都要白跑两趟。
+     */
     private String resolveBranch(String apiBase, GitInfo info, String token) {
+        String key = apiBase + "|" + info.owner + "/" + info.repo + "|" + info.branch;
+        BranchCache cached = branchCache.get(key);
+        if (cached != null && System.currentTimeMillis() - cached.at < BRANCH_TTL_MS) {
+            return cached.branch;
+        }
+        String resolved = resolveBranchRemote(apiBase, info, token);
+        branchCache.put(key, new BranchCache(resolved, System.currentTimeMillis()));
+        return resolved;
+    }
+
+    /** 尝试确认分支存在，失败则回退到仓库默认分支 */
+    private String resolveBranchRemote(String apiBase, GitInfo info, String token) {
         try {
             HttpResponse<String> resp = sendGet(
                     apiBase + "/repos/" + info.owner + "/" + info.repo + "/branches/" + info.branch, token);
@@ -435,23 +582,67 @@ public class CodePreviewService {
         return (url != null && url.contains("gitee.com")) ? "Gitee" : "GitHub";
     }
 
+    /** 带凭证的 GET（原始字节，用于 Gitee raw 这类非 JSON 端点）；网络异常返回 null */
+    private HttpResponse<byte[]> sendGetBytes(String url, String token) {
+        try {
+            HttpRequest.Builder b = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("User-Agent", "DevOps-Platform")
+                    .timeout(Duration.ofSeconds(20))
+                    .GET();
+            String auth = authHeader(url, token);
+            if (auth != null) b.header("Authorization", auth);
+            return http.send(b.build(), HttpResponse.BodyHandlers.ofByteArray());
+        } catch (Exception e) {
+            log.warn("Git raw GET 失败 {}: {}", url, e.getMessage());
+            return null;
+        }
+    }
+
     /**
-     * 把 HTTP 状态码翻译成用户能看懂、且能据此行动的一句话。
+     * 平台匿名 API 是否已限流。
+     * Gitee 额度用尽时会对整个 {@code /api/v5} 返回 403，响应体是纯文本
+     * {@code 403 Forbidden (Rate Limit Exceeded)}（不是 JSON），必须单独识别，
+     * 否则会被当成「凭证权限不足」，把公开仓库的用户误导去配 PAT。
+     */
+    private boolean isRateLimited(int code, String body) {
+        if (code != 403 && code != 429) return false;
+        if (body == null || body.isBlank()) return false;
+        String b = body.toLowerCase();
+        return b.contains("rate limit") || b.contains("too many requests") || b.contains("限流");
+    }
+
+    /**
+     * 把 HTTP 状态码翻译成用户能看懂、且能据此行动的一句话（+ 可选的行动建议 hint）。
      * 关键点：GitHub 对「私有仓库但没带凭证」和「仓库真的不存在」都返回 404，
      * 所以有无凭证要用不同的措辞，否则用户根本不知道是去哪儿配 PAT。
      */
-    private String apiError(String url, int code, String token) {
+    private Map<String, Object> httpError(String url, int code, String body, String token) {
         boolean hasToken = token != null && !token.isBlank();
         String plat = platformOf(url);
+        String scope = "Gitee".equals(plat) ? "projects" : "repo";
+
+        if (isRateLimited(code, body)) {
+            return errorWithHint(
+                    plat + " 接口请求已达上限（HTTP " + code + " Rate Limit）：未认证调用按 IP 限流 "
+                            + QUOTA_ANON + " 次/小时，当前额度已用完，公开仓库同样受影响",
+                    "等约 1 小时后自动恢复；或在「Git 集成 → Git 凭证」保存 " + plat + " 私人令牌"
+                            + "（" + scope + " 权限），认证后额度提升到 " + QUOTA_AUTH + " 次/小时。");
+        }
+
         return switch (code) {
-            case 401 -> plat + " 凭证无效或已过期（HTTP 401），请在「Git 集成 → GitHub 凭证」中重新配置";
-            case 403 -> plat + " 拒绝访问（HTTP 403）：凭证权限不足（私有仓库需 repo 权限），或触发了平台限流，请稍后重试";
+            case 401 -> errorWithHint(plat + " 凭证无效或已过期（HTTP 401）",
+                    "请在「Git 集成 → Git 凭证」中重新保存 Personal Access Token（" + scope + " 权限）");
+            case 403 -> errorWithHint(plat + " 拒绝访问（HTTP 403）：凭证权限不足",
+                    "私有仓库需要 " + scope + " 权限的 PAT，请在「Git 集成 → Git 凭证」中确认后重试");
             case 404 -> hasToken
-                    ? "仓库或文件不存在，或当前凭证无权访问（私有仓库需 PAT 具备 repo 权限）"
-                    : "仓库不存在，或为私有仓库 —— 私有仓库请先在「Git 集成 → GitHub 凭证」中配置 Personal Access Token";
-            case 409 -> "仓库是空的（还没有任何提交）";
-            case 429 -> "请求过于频繁（HTTP 429），请稍后重试";
-            default -> "读取失败 (HTTP " + code + ")";
+                    ? errorWithHint("仓库或文件不存在，或当前凭证无权访问",
+                            "私有仓库需 PAT 具备 " + scope + " 权限")
+                    : errorWithHint("仓库不存在，或为私有仓库",
+                            "私有仓库请先在「Git 集成 → Git 凭证」中配置 Personal Access Token（" + scope + " 权限）");
+            case 409 -> error("仓库是空的（还没有任何提交）");
+            case 429 -> errorWithHint("请求过于频繁（HTTP 429）", "请稍后重试");
+            default -> error("读取失败 (HTTP " + code + ")");
         };
     }
 
@@ -525,6 +716,7 @@ public class CodePreviewService {
             }
             return false;
         });
+        branchCache.entrySet().removeIf(e -> now - e.getValue().at > BRANCH_TTL_MS);
     }
 
     // ==================== 响应构建 ====================
@@ -542,8 +734,14 @@ public class CodePreviewService {
     }
 
     private Map<String, Object> error(String msg) {
+        return errorWithHint(msg, null);
+    }
+
+    /** @param hint 可选的「下一步该怎么做」，前端会单独一行展示（不参与报错文案匹配） */
+    private Map<String, Object> errorWithHint(String msg, String hint) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("error", msg);
+        if (hint != null && !hint.isBlank()) result.put("hint", hint);
         return result;
     }
 
@@ -577,6 +775,14 @@ public class CodePreviewService {
     /** Git URL 解析结果 */
     private record GitInfo(String platform, String host, String owner, String repo, String branch, String origin) {}
 
+    /** 分支解析缓存条目 */
+    private static class BranchCache {
+        final String branch;
+        final long at;
+
+        BranchCache(String branch, long at) { this.branch = branch; this.at = at; }
+    }
+
     /** 临时克隆缓存条目 */
     private static class TempClone {
         final Path dir;
@@ -602,17 +808,33 @@ public class CodePreviewService {
             this.name = name; this.type = type; this.path = path; this.size = size;
         }
 
+        /**
+         * 把一条 `a/b/c.java` 形式的路径挂进树。
+         * <p>
+         * ⚠️ 中间目录的 path 必须由**累积路径**算出（`a`、`a/b`），不能留空：
+         * 前端 `expandedDirs` 是以 `node.path` 为 key 的，path 为空会让所有目录都指向根节点
+         * ——点击任意文件夹变成了展开/收起根，表现为「层次不对、展开对不上」；
+         * 只返回文件路径的数据源（Gitee file_list）尤其明显。
+         */
         void add(String[] parts, int idx, String type, String fullPath, long size) {
             if (idx >= parts.length) return;
             String key = parts[idx];
+            boolean leaf = idx == parts.length - 1;
+            String nodePath = leaf
+                    ? fullPath
+                    : String.join("/", Arrays.copyOfRange(parts, 0, idx + 1));
+
             TreeNode child = children.computeIfAbsent(key,
-                    k -> new TreeNode(k, idx == parts.length - 1 ? type : "directory",
-                            idx == parts.length - 1 ? fullPath : ""));
-            if (idx == parts.length - 1) {
+                    k -> new TreeNode(k, leaf ? type : "directory", nodePath));
+
+            if (leaf) {
                 child.type = type;
                 child.path = fullPath;
                 child.size = size;
             } else {
+                // 目录项可能由文件路径隐式创建（path 已按累积路径算好），
+                // 也可能由数据源显式给出（此时以显式值为准）
+                if (child.path == null || child.path.isBlank()) child.path = nodePath;
                 child.add(parts, idx + 1, type, fullPath, size);
             }
         }

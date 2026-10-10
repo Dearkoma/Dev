@@ -49,8 +49,10 @@ const mono = { fontFamily: "'Courier New', monospace", fontSize: 12 }
  * 只有「触发构建」「打 tag 发布」这两个写操作才要求已配置凭证且有项目维护权限。
  *
  * @param codePreview 可选。渲染在「凭证配置」与「GitHub Actions」之间的节点。
+ * @param showCommits 是否渲染「提交历史」卡片，默认 true。
+ *        Git 集成页（GitPanel）下方有可切分支的完整提交列表，传 false 避免同一页重复展示。
  */
-export default function GithubPanel({ projectId, codePreview }) {
+export default function GithubPanel({ projectId, codePreview, showCommits = true }) {
   const { canManage } = useAuth()
   const [cfg, setCfg] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -78,7 +80,7 @@ export default function GithubPanel({ projectId, codePreview }) {
       setWorkflowInput(c?.workflow || '')
       const isGithub = c?.platform === 'github'
       const [cm, rn] = await Promise.all([
-        fetchGitCommits(projectId, c?.branch || '', 12).catch(() => []),
+        showCommits ? fetchGitCommits(projectId, c?.branch || '', 12).catch(() => []) : Promise.resolve([]),
         isGithub ? fetchGitRuns(projectId, 8).catch(() => []) : Promise.resolve([]),
       ])
       setCommits(Array.isArray(cm) ? cm : [])
@@ -88,7 +90,7 @@ export default function GithubPanel({ projectId, codePreview }) {
     } finally {
       setLoading(false)
     }
-  }, [projectId, showToast])
+  }, [projectId, showToast, showCommits])
 
   useEffect(() => { load() }, [load])
 
@@ -109,7 +111,7 @@ export default function GithubPanel({ projectId, codePreview }) {
   }
 
   const handleClearToken = async () => {
-    if (!window.confirm('确定清除已保存的 GitHub 凭证？清除后将无法触发 Actions 与发布。')) return
+    if (!window.confirm('确定清除已保存的 Git 凭证？清除后将无法触发 Actions 与发布，私有仓库也无法读取。')) return
     setBusy('cfg')
     try {
       await saveGitConfig(projectId, { token: '' })
@@ -212,22 +214,27 @@ export default function GithubPanel({ projectId, codePreview }) {
         </div>
       </div>
 
-      {/* 凭证配置 */}
-      {canManage && isGithub && (
+      {/* Git 凭证配置：所有 Git 平台（GitHub/GitLab/Gitee）共用同一入口；
+          公开仓库可不配（匿名可读），私有仓库由后端自动取用这里保存的 PAT */}
+      {canManage && (
         <div style={cardStyle}>
-          <h4 style={{ margin: '0 0 10px', fontSize: 13, color: '#475569' }}>GitHub 凭证</h4>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <h4 style={{ margin: '0 0 10px', fontSize: 13, color: '#475569' }}>
+            Git 凭证{cfg?.platform && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 400, color: '#9ca3af' }}>（{cfg.platform}）</span>}
+          </h4>
+          <div style={{ display: 'grid', gridTemplateColumns: isGithub ? '1fr 1fr' : '1fr', gap: 12 }}>
             <div>
               <label style={labelStyle}>Personal Access Token（留空 = 不修改）</label>
               <input type="password" style={inputStyle} value={tokenInput}
                 onChange={e => setTokenInput(e.target.value)}
-                placeholder={cfg?.hasToken ? '已保存（如需更换请重新输入）' : 'ghp_...'} />
+                placeholder={cfg?.hasToken ? '已保存（如需更换请重新输入）' : 'ghp_... / glpat-... / 私人令牌'} />
             </div>
-            <div>
-              <label style={labelStyle}>Workflow 文件名</label>
-              <input style={inputStyle} value={workflowInput}
-                onChange={e => setWorkflowInput(e.target.value)} placeholder="build.yaml" />
-            </div>
+            {isGithub && (
+              <div>
+                <label style={labelStyle}>Workflow 文件名</label>
+                <input style={inputStyle} value={workflowInput}
+                  onChange={e => setWorkflowInput(e.target.value)} placeholder="build.yaml" />
+              </div>
+            )}
           </div>
           <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
             <button style={btnPrimary} onClick={handleSaveConfig} disabled={busy === 'cfg'}>
@@ -238,13 +245,18 @@ export default function GithubPanel({ projectId, codePreview }) {
             )}
           </div>
           <div style={{ marginTop: 8, fontSize: 11, color: '#5F5E5A', lineHeight: 1.7 }}>
-            PAT 需具备 <span style={mono}>repo</span> 与 <span style={mono}>workflow</span> 权限；<br />
-            凭证经 AES-GCM 加密后存入数据库，接口不返回明文，页面上也不会回显。
+            {isGithub ? (
+              <>GitHub PAT 需具备 <span style={mono}>repo</span> 权限；要触发 Actions 与打 tag 发布还需 <span style={mono}>workflow</span> 权限。<br /></>
+            ) : (
+              <>令牌需具备仓库读取权限（创建 MR 需写权限）。<br /></>
+            )}
+            凭证经 AES-GCM 加密后存入数据库，接口不返回明文，页面上也不会回显；
+            保存后本页的代码预览、分支、提交、MR 与运行记录都会自动使用它（公开仓库无需配置即可查看）。
           </div>
         </div>
       )}
 
-      {/* 代码预览（调用方注入）—— 位于 GitHub 凭证与 Actions 之间。
+      {/* 代码预览（调用方注入）—— 位于 Git 凭证与 Actions 之间。
           公开仓库无需登录；私有仓库由后端自动取用上方保存的凭证（前端不用另传 token） */}
       {codePreview && (
         <div style={cardStyle}>
@@ -275,7 +287,7 @@ export default function GithubPanel({ projectId, codePreview }) {
             </div>
           ) : !cfg?.hasToken ? (
             <div style={{ marginTop: 8, fontSize: 11, color: '#92400e' }}>
-              触发构建与发布版本需要先保存 GitHub 凭证；仅查看运行记录、分支、提交与代码则无需凭证。
+              触发构建与发布版本需要先保存 Git 凭证；仅查看运行记录、分支、提交与代码则无需凭证。
             </div>
           ) : null}
 
@@ -342,7 +354,8 @@ export default function GithubPanel({ projectId, codePreview }) {
         </div>
       )}
 
-      {/* 提交历史 */}
+      {/* 提交历史（Git 集成页调用方传 showCommits=false 隐藏，避免与页面下方的完整提交列表重复） */}
+      {showCommits && (
       <div style={cardStyle}>
         <h4 style={{ margin: '0 0 10px', fontSize: 13, color: '#475569' }}>提交历史</h4>
         {commits.length === 0 && (
@@ -360,6 +373,7 @@ export default function GithubPanel({ projectId, codePreview }) {
           </div>
         ))}
       </div>
+      )}
     </div>
   )
 }

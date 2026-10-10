@@ -11,7 +11,6 @@ export default function GitPanel() {
   const [commits, setCommits] = useState([])
   const [mrs, setMrs] = useState([])
   const [selectedBranch, setSelectedBranch] = useState('main')
-  const [token, setToken] = useState(localStorage.getItem('devops_git_token') || '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
@@ -35,8 +34,8 @@ export default function GitPanel() {
       if (info.error) { setError(info.error); setLoading(false); return }
 
       const [branchesData, mrsData] = await Promise.all([
-        fetchGitBranches(projectId, token).catch(() => []),
-        fetchGitMRs(projectId, 'open', token).catch(() => [])
+        fetchGitBranches(projectId).catch(() => []),
+        fetchGitMRs(projectId, 'open').catch(() => [])
       ])
       setBranches(Array.isArray(branchesData) ? branchesData : [])
       setMrs(Array.isArray(mrsData) ? mrsData : [])
@@ -58,14 +57,9 @@ export default function GitPanel() {
   const loadCommits = async (branch) => {
     setSelectedBranch(branch)
     try {
-      const data = await fetchGitCommits(projectId, branch, 20, token)
+      const data = await fetchGitCommits(projectId, branch, 20)
       setCommits(Array.isArray(data) ? data : [])
     } catch (e) { console.error('Failed to load commits', e) }
-  }
-
-  const saveToken = (t) => {
-    setToken(t)
-    localStorage.setItem('devops_git_token', t)
   }
 
   const handleCreateMR = async () => {
@@ -77,11 +71,11 @@ export default function GitPanel() {
         sourceBranch: mrSource,
         targetBranch: mrTarget,
         description: mrDesc
-      }, token)
+      })
       setShowMRForm(false)
       setMrTitle(''); setMrSource(''); setMrDesc('')
       // 刷新 MR 列表
-      const mrsData = await fetchGitMRs(projectId, 'open', token)
+      const mrsData = await fetchGitMRs(projectId, 'open')
       setMrs(Array.isArray(mrsData) ? mrsData : [])
     } catch (e) {
       alert('创建 MR 失败: ' + e.message)
@@ -102,41 +96,15 @@ export default function GitPanel() {
         </div>
       )}
 
-      {/* 仓库概览 → 凭证 → 代码预览 → Actions → 提交历史（代码预览插在凭证与 Actions 之间） */}
+      {/* 仓库概览 → Git 凭证 → 代码预览 → Actions（提交历史由下方「分支 + 提交」栅格承担；
+          凭证统一走上方「Git 凭证」保存的 PAT，公开仓库无需登录，本页不再另设 token 输入框） */}
       <GithubPanel
         projectId={projectId}
-        codePreview={<ProjectCodePreview projectId={projectId} token={token} />}
+        codePreview={<ProjectCodePreview projectId={projectId} />}
+        showCommits={false}
       />
 
-      {/* 临时 Git Token（可选）：仅本浏览器有效，用于私有仓库的分支/提交/MR/代码预览即时查询 */}
-      <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-        <label style={{ fontSize: 12, color: '#888', display: 'block', marginBottom: 4 }}>
-          临时 Git 访问 Token（可选，公开仓库无需填写）
-          <span style={{ color: '#c2410c' }}> · 仅用于私有仓库的分支 / 提交 / MR / 代码预览查询，只存在浏览器本地、换设备即失效；需要长期生效请在上方「GitHub 凭证」中保存</span>
-        </label>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input type="password" value={token}
-            onChange={e => saveToken(e.target.value)}
-            placeholder="ghp_xxx 或 glpat-xxx ..."
-            style={{ flex: 1, padding: '6px 10px', fontSize: 13 }} />
-          <button onClick={initLoad} className="btn btn-primary" style={{ fontSize: 12 }}>
-            🔄 刷新
-          </button>
-        </div>
-      </div>
-
-      {/* 仓库信息 */}
-      {repoInfo && !repoInfo.error && (
-        <div className="card" style={{ padding: 12, marginBottom: 16 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span style={{ fontWeight: 600 }}>{repoInfo.platform.toUpperCase()}</span>
-            <span style={{ color: '#888' }}>|</span>
-            <span>{repoInfo.owner}/{repoInfo.repo}</span>
-          </div>
-        </div>
-      )}
-
-      {/* 分支列表 + 提交历史 */}
+      {/* 分支列表 + 提交历史（本页的提交展示，可切分支、条数更多） */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 16 }}>
         {/* 分支 */}
         <div className="card" style={{ padding: 12 }}>

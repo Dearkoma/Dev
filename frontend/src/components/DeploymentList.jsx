@@ -9,6 +9,7 @@ import {
 } from '../api'
 import { emit, useResourceEvent } from '../eventBus'
 import EnvironmentList from './EnvironmentList'
+import CanaryControl from './CanaryControl'
 
 export default function DeploymentList() {
   const { canTrigger, canManage } = useAuth()
@@ -202,6 +203,9 @@ export default function DeploymentList() {
         <EnvironmentList />
       ) : (
       <>
+      {/* 金丝雀发布控制：CANARY 策略部署后的全量提升 / 回滚收尾 */}
+      <CanaryControl />
+
       {tab === 'requests' && (
         <div className="card" style={{ padding: 0 }}>
           <div className="table-container">

@@ -61,4 +61,20 @@ public class PipelineController {
         var versions = pipelineService.getVersionHistory(id);
         return ResponseEntity.ok(versions);
     }
+
+    /** 回滚流水线到指定历史版本（回滚前会自动把当前定义存为新快照） */
+    @PostMapping("/{id}/rollback-version")
+    public ResponseEntity<?> rollbackVersion(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        accessService.assertCanAccessPipeline(id);
+        Object vid = body.get("versionId");
+        if (vid == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "缺少 versionId"));
+        }
+        try {
+            Pipeline p = pipelineService.rollbackToVersion(id, Long.valueOf(vid.toString()));
+            return p == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(p);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
 }

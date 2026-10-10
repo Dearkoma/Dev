@@ -232,7 +232,6 @@ export default function InstanceList() {
       setAccessInfo(await getAccessInfo(inst.id))
       try {
         const containersResult = await getInstanceContainers(inst.id)
-        console.log('[容器列表API] 实例', inst.id, '返回:', JSON.stringify(containersResult))
         setContainersData(containersResult)
       } catch (e) {
         console.error('[容器列表API] 实例', inst.id, '失败:', e.message)
@@ -254,7 +253,6 @@ export default function InstanceList() {
     const container = containers.find(c => c.role === logRole)?.name || null
     try {
       const r = await getInstanceLogs(inst.id, tail, container)
-      console.log('[日志API] 实例', inst.id, '容器', container, '角色', logRole, '返回:', r)
       setLogsData(r)
       // 成功获取日志时缓存（按 id-role 分开缓存）
       if (r.success && r.logs) {
