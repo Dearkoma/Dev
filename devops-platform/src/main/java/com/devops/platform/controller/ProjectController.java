@@ -9,6 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Map;
+import com.devops.platform.aspect.AuditAspect;
 @RestController
 @RequestMapping("/api/projects")
 @RequiredArgsConstructor
@@ -27,14 +28,17 @@ public class ProjectController {
         Project p = projectService.getProject(id);
         return p == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(p);
     }
+    @AuditAspect.Audit(action = "CREATE", resource = "PROJECT")
     @PostMapping
     public Project create(@RequestBody Project project) { return projectService.createProject(project); }
+    @AuditAspect.Audit(action = "UPDATE", resource = "PROJECT")
     @PutMapping("/{id}")
     public ResponseEntity<Project> update(@PathVariable Long id, @RequestBody Project project) {
         accessService.assertCanAccessProject(id);
         Project p = projectService.updateProject(id, project);
         return p == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(p);
     }
+    @AuditAspect.Audit(action = "DELETE", resource = "PROJECT")
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         accessService.assertCanAccessProject(id);

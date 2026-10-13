@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Map;
+import com.devops.platform.aspect.AuditAspect;
 @RestController
 @RequestMapping("/api/environments")
 @RequiredArgsConstructor
@@ -24,6 +25,7 @@ public class EnvironmentController {
         Environment e = environmentService.getEnvironment(id);
         return e == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(e);
     }
+    @AuditAspect.Audit(action = "CREATE", resource = "ENVIRONMENT")
     @PostMapping
     public Environment create(@RequestBody Environment env) {
         if (env.getProjectId() != null) {
@@ -31,12 +33,14 @@ public class EnvironmentController {
         }
         return environmentService.createEnvironment(env);
     }
+    @AuditAspect.Audit(action = "UPDATE", resource = "ENVIRONMENT")
     @PutMapping("/{id}")
     public ResponseEntity<Environment> update(@PathVariable Long id, @RequestBody Environment env) {
         accessService.assertCanAccessEnvironment(id);
         Environment e = environmentService.updateEnvironment(id, env);
         return e == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(e);
     }
+    @AuditAspect.Audit(action = "DELETE", resource = "ENVIRONMENT")
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         accessService.assertCanAccessEnvironment(id);

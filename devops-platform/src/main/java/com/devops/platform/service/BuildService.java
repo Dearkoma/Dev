@@ -71,6 +71,16 @@ public class BuildService {
      */
     private final ThreadLocal<com.devops.platform.entity.Pipeline> currentPipeline = new ThreadLocal<>();
 
+    /**
+     * 本次构建实际使用的绝对工作目录。
+     * <p>
+     * workspaceDirName() 依赖 currentPipeline 这个 ThreadLocal，不同调用点取到的
+     * 流水线上下文可能不一致，导致「准备代码」与「收集制品」算出两个不同的目录
+     * （例如 apartnment 与 apartnment-default），制品因此收集不到。
+     * 这里在代码准备阶段把实际目录记下来，构建收尾统一读它，避免再算一次。
+     */
+    private final ThreadLocal<String> currentWorkspace = new ThreadLocal<>();
+
     /** 绝对路径的日志目录（避免 @Async 线程工作目录不一致导致的文件找不到） */
     private Path absoluteLogDir;
 
@@ -530,7 +540,7 @@ public class BuildService {
                             continue;
                         }
                         final String stepLogPrefix = "[STEP-" + (stepPi + 1) + "/" + stage.steps.size() + "] ";
-                        futures.add(java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                        futures.add(asyncWithContext(() -> {
                             StringBuilder stepLog = new StringBuilder();
                             stepLog.append(stepLogPrefix).append("执行: ").append(step.name)
                                    .append(" (").append(step.type).append(")\n");
@@ -717,6 +727,7 @@ public class BuildService {
         }
         } finally {
             currentPipeline.remove();
+            currentWorkspace.remove();
 
             // ===== 释放锁并处理队列 =====
             if (acquiredProject) {
@@ -731,13 +742,40 @@ public class BuildService {
     }
 
     /** 收集构建制品 */
+    /**
+     * 把当前的「流水线 / 工作目录」上下文带进异步任务。
+     * <p>
+     * 步骤执行被包在 CompletableFuture 里做并行与超时控制，实际跑在
+     * ForkJoinPool 线程上。ThreadLocal 不会自动传递，异步线程里
+     * workspaceDirName() 因取不到流水线而算出另一个目录，于是出现
+     * 「准备代码在 apartnment-default、Maven 却构建在 apartnment」的
+     * 分裂，制品收集因此扫不到文件。这里显式把上下文复制过去。
+     */
+    private <T> java.util.concurrent.CompletableFuture<T> asyncWithContext(
+            java.util.function.Supplier<T> task) {
+        final com.devops.platform.entity.Pipeline pipeline = currentPipeline.get();
+        final String workspace = currentWorkspace.get();
+        return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            if (pipeline != null) currentPipeline.set(pipeline);
+            if (workspace != null) currentWorkspace.set(workspace);
+            try {
+                return task.get();
+            } finally {
+                currentPipeline.remove();
+                currentWorkspace.remove();
+            }
+        });
+    }
+
     private void collectArtifacts(Build build, Project project, StringBuilder logBuf) {
         if (simulationMode) {
             logBuf.append("[INFO] 模拟模式，跳过制品收集\n");
             return;
         }
         try {
-            String workspace = getProjectWorkspace(project);
+            // 用与构建步骤相同的目录解析：monorepo 时真正的构建根目录在子目录
+            // （如 workspace/backend），制品在它的 target 下而不是工作区根目录。
+            String workspace = findProjectRoot(project).toString();
             String lang = project.getLanguage() != null ? project.getLanguage().toLowerCase() : "java";
 
             // 制品搜索: (目录, 后缀列表)
@@ -757,19 +795,36 @@ public class BuildService {
                 searchPaths.add(new Path[]{Paths.get(workspace, "target")});
             }
 
+            logBuf.append("========== 制品收集 ==========\n");
+            logBuf.append("[INFO] 扫描目录: ").append(workspace).append("（语言: ").append(lang).append("）\n");
+
+            int found = 0;
             for (Path[] dirs : searchPaths) {
                 for (Path dir : dirs) {
-                    if (!Files.exists(dir)) continue;
+                    if (!Files.exists(dir)) {
+                        logBuf.append("[INFO] 目录不存在，跳过: ").append(dir).append("\n");
+                        continue;
+                    }
                     try (var files = Files.list(dir)) {
-                        files.filter(p -> isArtifactFile(p, lang)).forEach(f -> {
+                        var hits = files.filter(p -> isArtifactFile(p, lang)).toList();
+                        if (hits.isEmpty()) {
+                            logBuf.append("[INFO] 目录内未匹配到制品: ").append(dir).append("\n");
+                        }
+                        for (Path f : hits) {
                             try {
                                 recordSingleArtifact(build, f, logBuf);
+                                found++;
                             } catch (IOException e) {
                                 logBuf.append("[WARN] 制品收集失败: ").append(e.getMessage()).append("\n");
                             }
-                        });
+                        }
                     }
                 }
+            }
+            if (found == 0) {
+                logBuf.append("[WARN] 未收集到任何制品，请检查构建是否产出预期文件\n");
+            } else {
+                logBuf.append("[INFO] 本次共登记制品 ").append(found).append(" 件\n");
             }
         } catch (IOException e) {
             logBuf.append("[WARN] 制品扫描失败: ").append(e.getMessage()).append("\n");
@@ -2455,6 +2510,8 @@ public class BuildService {
         String dirName = workspaceDirName(project);
         Path workspacePath = root.resolve(dirName);
         String workspaceAbs = workspacePath.toString();
+        // 记下实际目录，构建收尾（制品收集/服务实例/缓存）统一读它
+        currentWorkspace.set(workspaceAbs);
         String gitUrl = project.getGitUrl();
         // 分支来源: 触发参数 > 项目配置; 两者都为空 = null, 表示跟随远端默认分支 (main / master 自动识别)
         String effectiveBranch = (branch != null && !branch.isBlank()) ? branch.trim()
@@ -3219,6 +3276,12 @@ public class BuildService {
 
     // ===================== 辅助方法 =====================
     private String getProjectWorkspace(Project project) {
+        // 构建过程中优先用「代码准备阶段记下的实际目录」，避免因流水线上下文
+        // 不一致而算出另一个目录（制品收集不到就是这么来的）
+        String recorded = currentWorkspace.get();
+        if (recorded != null) {
+            return recorded;
+        }
         try {
             Path root = resolveWorkspaceRoot();
             return root.resolve(workspaceDirName(project)).toString();
@@ -3725,7 +3788,7 @@ public class BuildService {
                 if (step.timeoutSeconds > 0) {
                     final long timeout = step.timeoutSeconds * 1000L;
                     java.util.concurrent.CompletableFuture<Boolean> future =
-                            java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                            asyncWithContext(() -> {
                                 try {
                                     return executeStep(step, project, logBuf, buildId);
                                 } catch (Exception e) {

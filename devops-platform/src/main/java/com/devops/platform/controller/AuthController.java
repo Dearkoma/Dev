@@ -19,6 +19,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import com.devops.platform.aspect.AuditAspect;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -55,6 +56,7 @@ public class AuthController {
      * 用户登录（需携带 X-Login-Token 头，防止非前端直调）
      * JWT 同时通过响应体返回和 HttpOnly Cookie 设置
      */
+    @AuditAspect.Audit(action = "LOGIN", resource = "USER")
     @PostMapping("/login")
     public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request,
                                    @RequestHeader(value = "X-Login-Token", required = false) String loginToken,
@@ -97,6 +99,7 @@ public class AuthController {
     /**
      * 登出 — 清除 token cookie
      */
+    @AuditAspect.Audit(action = "LOGOUT", resource = "USER")
     @PostMapping("/logout")
     public ResponseEntity<?> logout(HttpServletResponse response) {
         Cookie cookie = new Cookie("devops_token", "");
@@ -112,6 +115,7 @@ public class AuthController {
     /**
      * 用户注册
      */
+    @AuditAspect.Audit(action = "CREATE", resource = "USER")
     @PostMapping("/register")
     public ResponseEntity<?> register(@Valid @RequestBody RegisterRequest request,
                                       HttpServletResponse response) {

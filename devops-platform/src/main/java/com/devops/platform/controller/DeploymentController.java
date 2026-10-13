@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 import java.security.Principal;
 import java.util.List;
 import java.util.Map;
+import com.devops.platform.aspect.AuditAspect;
 
 @Slf4j
 @RestController
@@ -50,6 +51,7 @@ public class DeploymentController {
     }
 
     /** 金丝雀全量提升：canary 镜像覆盖 stable，稳定后删除 canary（权限同部署审批） */
+    @AuditAspect.Audit(action = "APPROVE", resource = "DEPLOYMENT")
     @PostMapping("/canary-promote")
     public ResponseEntity<?> promoteCanary(@RequestParam Long projectId) {
         ResponseEntity<?> denied = assertCanaryOperator(projectId);
@@ -67,6 +69,7 @@ public class DeploymentController {
     }
 
     /** 金丝雀回滚：删除 canary，流量回落稳定版（权限同部署审批） */
+    @AuditAspect.Audit(action = "ROLLBACK", resource = "DEPLOYMENT")
     @PostMapping("/canary-rollback")
     public ResponseEntity<?> rollbackCanary(@RequestParam Long projectId) {
         ResponseEntity<?> denied = assertCanaryOperator(projectId);
@@ -99,6 +102,7 @@ public class DeploymentController {
     }
 
     /** 申请部署 */
+    @AuditAspect.Audit(action = "CREATE", resource = "DEPLOYMENT")
     @PostMapping("/request")
     public ResponseEntity<DeploymentRequest> requestDeploy(@RequestBody Map<String, Object> body, Principal principal) {
         Long buildId = Long.valueOf(body.get("buildId").toString());
@@ -119,6 +123,7 @@ public class DeploymentController {
     }
 
     /** 审批通过 */
+    @AuditAspect.Audit(action = "APPROVE", resource = "DEPLOYMENT")
     @PostMapping("/approve/{id}")
     public ResponseEntity<?> approve(
             @PathVariable Long id,
@@ -136,6 +141,7 @@ public class DeploymentController {
     }
 
     /** 审批拒绝 */
+    @AuditAspect.Audit(action = "REJECT", resource = "DEPLOYMENT")
     @PostMapping("/reject/{id}")
     public ResponseEntity<?> reject(
             @PathVariable Long id,
@@ -203,6 +209,7 @@ public class DeploymentController {
     }
 
     /** 执行回滚 */
+    @AuditAspect.Audit(action = "ROLLBACK", resource = "DEPLOYMENT")
     @PostMapping("/rollback/{historyId}")
     public ResponseEntity<?> rollback(
             @PathVariable Long historyId,

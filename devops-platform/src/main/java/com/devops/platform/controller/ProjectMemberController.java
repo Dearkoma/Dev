@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.*;
 import java.security.Principal;
 import java.util.List;
 import java.util.Map;
+import com.devops.platform.aspect.AuditAspect;
 
 @RestController
 @RequestMapping("/api/projects/{projectId}/members")
@@ -24,6 +25,7 @@ public class ProjectMemberController {
     }
 
     /** 添加成员 */
+    @AuditAspect.Audit(action = "CREATE", resource = "PROJECT_MEMBER")
     @PostMapping
     public ResponseEntity<?> addMember(@PathVariable Long projectId,
                                        @RequestBody Map<String, String> body,
@@ -51,6 +53,7 @@ public class ProjectMemberController {
     }
 
     /** 修改成员角色 */
+    @AuditAspect.Audit(action = "UPDATE", resource = "PROJECT_MEMBER")
     @PutMapping("/{memberId}")
     public ResponseEntity<?> updateMember(@PathVariable Long projectId,
                                           @PathVariable Long memberId,
@@ -77,6 +80,7 @@ public class ProjectMemberController {
     }
 
     /** 移除成员 */
+    @AuditAspect.Audit(action = "DELETE", resource = "PROJECT_MEMBER")
     @DeleteMapping("/{memberId}")
     public ResponseEntity<?> removeMember(@PathVariable Long projectId,
                                           @PathVariable Long memberId,

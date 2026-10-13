@@ -32,7 +32,7 @@ public class DevOpsPlatformApplication {
         ║   ██████╔╝███████╗██║  ██║╚█████╔╝███████║           ║
         ║   ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚════╝ ╚══════╝           ║
         ║                                                      ║
-        ║         持续交付平台 v1.0.0                            ║
+        ║         持续交付平台 v1.0.1                            ║
         ║         DevOps Continuous Delivery Platform          ║
         ║                                                      ║
         ║   🚀 前端：http://localhost:3000/                     ║

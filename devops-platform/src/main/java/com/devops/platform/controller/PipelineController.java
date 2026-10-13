@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Map;
+import com.devops.platform.aspect.AuditAspect;
 
 @RestController
 @RequestMapping("/api/pipelines")
@@ -29,6 +30,7 @@ public class PipelineController {
         Pipeline p = pipelineService.getPipeline(id);
         return p == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(p);
     }
+    @AuditAspect.Audit(action = "CREATE", resource = "PIPELINE")
     @PostMapping
     public ResponseEntity<?> create(@RequestBody Pipeline pipeline) {
         if (pipeline.getProjectId() != null) {
@@ -41,12 +43,14 @@ public class PipelineController {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
+    @AuditAspect.Audit(action = "UPDATE", resource = "PIPELINE")
     @PutMapping("/{id}")
     public ResponseEntity<Pipeline> update(@PathVariable Long id, @RequestBody Pipeline pipeline) {
         accessService.assertCanAccessPipeline(id);
         Pipeline p = pipelineService.updatePipeline(id, pipeline);
         return p == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(p);
     }
+    @AuditAspect.Audit(action = "DELETE", resource = "PIPELINE")
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         accessService.assertCanAccessPipeline(id);
@@ -63,6 +67,7 @@ public class PipelineController {
     }
 
     /** 回滚流水线到指定历史版本（回滚前会自动把当前定义存为新快照） */
+    @AuditAspect.Audit(action = "UPDATE", resource = "PIPELINE")
     @PostMapping("/{id}/rollback-version")
     public ResponseEntity<?> rollbackVersion(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         accessService.assertCanAccessPipeline(id);

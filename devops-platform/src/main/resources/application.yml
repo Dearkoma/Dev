@@ -4,6 +4,8 @@ server:
     context-path: /
 
 spring:
+  config:
+    import: optional:file:./config/local-secrets.yml
   application:
     name: devops-platform
 
@@ -11,7 +13,7 @@ spring:
     url: jdbc:mysql://localhost:3306/devops_platform?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&createDatabaseIfNotExist=true
     driver-class-name: com.mysql.cj.jdbc.Driver
     username: root
-    password: Dearkoma.962464
+    password: ${DEVOPS_DB_PASSWORD:}
     hikari:
       maximum-pool-size: 10
       minimum-idle: 5
@@ -126,10 +128,10 @@ devops:
     java-db-repository: ghcr.io/aquasecurity/trivy-java-db
     # 手动更新漏洞库的超时时间 (下载量大, 默认 15 分钟)
     db-update-timeout-seconds: 900
-    encryption-key: ""
+    encryption-key: ${DEVOPS_ENCRYPTION_KEY:}
   # JWT
   jwt:
-    secret: ZGV2b3BzLXBsYXRmb3JtLWp3dC1zZWNyZXQta2V5LTIwMjYtMDEtMDEtc3VwZXItc2VjdXJl
+    secret: ${DEVOPS_JWT_SECRET:}
     expiration: 86400000  # 24 小时（毫秒）
 
   # 质量门禁配置
@@ -147,10 +149,10 @@ devops:
 
   # 入向 Webhook 签名校验 (共享密钥, 留空则跳过校验)
   webhook:
-    inbound-secret: ""
+    inbound-secret: ${DEVOPS_WEBHOOK_SECRET:}
 
   # 默认登录
   admin:
     default-username: admin
-    default-password: admin123
+    default-password: ${DEVOPS_ADMIN_PASSWORD:}
     default-email: admin@devops.local

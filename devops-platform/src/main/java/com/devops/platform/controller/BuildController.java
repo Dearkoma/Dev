@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 import java.security.Principal;
 import java.util.List;
 import java.util.Map;
+import com.devops.platform.aspect.AuditAspect;
 
 @RestController
 @RequestMapping("/api/builds")
@@ -21,6 +22,7 @@ public class BuildController {
     private final BuildRepository buildRepository;
     private final ProjectAccessService accessService;
 
+    @AuditAspect.Audit(action = "TRIGGER", resource = "BUILD")
     @PostMapping("/trigger")
     public ResponseEntity<?> trigger(
             @RequestParam Long projectId,
@@ -106,6 +108,7 @@ public class BuildController {
         return ResponseEntity.ok(log);
     }
 
+    @AuditAspect.Audit(action = "CANCEL", resource = "BUILD")
     @DeleteMapping("/{id}/cancel")
     public ResponseEntity<Void> cancel(@PathVariable Long id) {
         accessService.assertCanAccessBuild(id);
@@ -113,6 +116,7 @@ public class BuildController {
         return ResponseEntity.ok().build();
     }
 
+    @AuditAspect.Audit(action = "DELETE", resource = "BUILD")
     @DeleteMapping("/{id}")
     public ResponseEntity<?> deleteBuild(@PathVariable Long id) {
         accessService.assertCanAccessBuild(id);
@@ -125,6 +129,7 @@ public class BuildController {
     }
 
     /** 从失败步骤断点续跑 */
+    @AuditAspect.Audit(action = "TRIGGER", resource = "BUILD")
     @PostMapping("/{id}/retry")
     public ResponseEntity<?> retryBuild(@PathVariable Long id) {
         accessService.assertCanAccessBuild(id);
@@ -144,6 +149,7 @@ public class BuildController {
     }
 
     /** 审批通过 — 继续执行等待中的 APPROVAL 步骤 */
+    @AuditAspect.Audit(action = "APPROVE", resource = "BUILD")
     @PostMapping("/{id}/approve-step")
     public ResponseEntity<?> approveStep(@PathVariable Long id, Principal principal) {
         accessService.assertCanAccessBuild(id);
@@ -157,6 +163,7 @@ public class BuildController {
     }
 
     /** 审批拒绝 — 终止等待中的 APPROVAL 步骤 */
+    @AuditAspect.Audit(action = "REJECT", resource = "BUILD")
     @PostMapping("/{id}/reject-step")
     public ResponseEntity<?> rejectStep(@PathVariable Long id, @RequestBody(required = false) Map<String, String> body, Principal principal) {
         accessService.assertCanAccessBuild(id);

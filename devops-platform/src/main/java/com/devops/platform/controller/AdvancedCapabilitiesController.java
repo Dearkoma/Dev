@@ -391,7 +391,7 @@ public class AdvancedCapabilitiesController {
         provenance.setSlsaLevel("L2");
         provenance.setArtifactDigest("sha256:" + UUID.randomUUID().toString().replace("-", ""));
         provenance.setArtifactUri("harbor.local/devops/app:v1.0");
-        provenance.setBuilderId("devops-platform/v1.0.0");
+        provenance.setBuilderId("devops-platform/v1.0.1");
         provenance.setVerified(true);
         provenance = slsaRepo.save(provenance);
         return ResponseEntity.ok(provenance);

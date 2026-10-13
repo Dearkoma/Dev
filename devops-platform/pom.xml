@@ -13,7 +13,7 @@
 
     <groupId>com.devops</groupId>
     <artifactId>devops-platform</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <name>DevOps Continuous Delivery Platform</name>
     <description>基于 Spring Boot + Docker + Kubernetes 的 DevOps 持续交付平台</description>
     <packaging>jar</packaging>

@@ -17,6 +17,18 @@ public class PipelineService {
         return pipelineRepository.findAll();
     }
     public Pipeline getPipeline(Long id) { return pipelineRepository.findById(id).orElse(null); }
+    /**
+     * 定时表达式校验：非法表达式在写入时就拒绝，而不是等到调度时才跳过。
+     * 原本只在 SchedulerService 触发时判断，用户填错了得不到即时反馈。
+     */
+    private void validateCron(String cronExpression) {
+        if (cronExpression != null && !cronExpression.isBlank()
+                && !SchedulerService.isValidCron(cronExpression)) {
+            throw new IllegalArgumentException(
+                    "定时触发表达式不合法，请使用标准 6 段 cron 表达式（分 时 日 月 周 年）");
+        }
+    }
+
     public Pipeline createPipeline(Pipeline pipeline) {
         if (pipeline.getName() == null || pipeline.getName().isBlank()) {
             throw new IllegalArgumentException("流水线名称不能为空");
@@ -24,6 +36,7 @@ public class PipelineService {
         if (pipeline.getProjectId() == null) {
             throw new IllegalArgumentException("请选择所属项目");
         }
+        validateCron(pipeline.getCronExpression());
         // 确保 cronEnabled 有默认值
         if (pipeline.getCronEnabled() == null) {
             pipeline.setCronEnabled(false);
@@ -34,6 +47,9 @@ public class PipelineService {
     public Pipeline updatePipeline(Long id, Pipeline pipeline) {
         Pipeline existing = getPipeline(id);
         if (existing == null) return null;
+
+        // 校验放在改动落库之前，非法表达式不会被写入
+        validateCron(pipeline.getCronExpression());
 
         // 保存旧版本快照（如果定义有变化）
         if (pipeline.getDefinition() != null && !pipeline.getDefinition().equals(existing.getDefinition())) {

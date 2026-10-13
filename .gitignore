@@ -18,7 +18,10 @@
 .idea
 *.iml
 *.class
-**/test
+
+# 注意：这里原本有一条 `**/test`，会连源码里的 src/test 单元测试一起排除。
+# 构建产物已在 **/target/ 之下，不需要再单独排除，故移除该条——
+# 单元测试属于源码，必须入仓。
 
 **/node_modules/
 **/tmp/
@@ -34,15 +37,36 @@ frontend/dist/
 *.log
 *.log.*
 
+# 构建期缓存（Maven 本地仓库，单项目可达数百 MB）
+**/data/cache/
+
+# 内嵌数据库文件（早期用 H2 跑通时留下的运行时产物）
+*.mv.db
+*.trace.db
+
 # 论文产物与参考资料（非平台代码）
 outputs/
 参考文献/
+
+# 例外：devops-platform/outputs/ 不是"产物"，而是平台自带的报告生成脚本
+# （generate_*.py）与文档样张，属于项目资料，需要入仓。
+# 注意顺序：必须先放行目录本身，git 才会进入该目录；被排除的目录下
+# 的文件无法用 ! 单独放行。
+!/devops-platform/outputs/
+
+# Python 编译缓存（放在上一条之后，确保在放行的目录里也生效）
+**/__pycache__/
+*.pyc
 
 # WorkBuddy 工作空间（非平台代码）
 .workbuddy/
 
 # Maven wrapper 下载缓存
 .mvn/wrapper/dists/
+
+# 本地敏感配置：数据库口令、JWT 密钥、AES 加密密钥、默认管理员口令。
+# application.yml 里只留 ${环境变量:} 占位符，真实取值放在这个文件中。
+**/config/local-secrets.yml
 
 # 第三方工具二进制 (Trivy 等)
 # 整个 tools/ 目录不入仓（已由上方的白名单覆盖）；后端按 tools/<工具名>/<可执行文件>

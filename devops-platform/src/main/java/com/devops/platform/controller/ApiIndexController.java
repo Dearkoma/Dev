@@ -19,7 +19,7 @@ public class ApiIndexController {
     public Map<String, Object> index() {
         return Map.of(
             "name", "DevOps Continuous Delivery Platform API",
-            "version", "1.0.0",
+            "version", "1.0.1",
             "endpoints", List.of(
                 Map.of("method", "GET",    "path", "/api/dashboard/stats",       "desc", "获取看板统计数据"),
                 Map.of("method", "GET",    "path", "/api/dashboard/recent-builds", "desc", "获取最近构建记录"),

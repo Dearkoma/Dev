@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
+import com.devops.platform.aspect.AuditAspect;
 
 @RestController
 @RequestMapping("/api/users")
@@ -31,6 +32,7 @@ public class UserController {
     }
 
     /** 创建用户 */
+    @AuditAspect.Audit(action = "CREATE", resource = "USER")
     @PostMapping
     public ResponseEntity<?> create(@RequestBody User user) {
         try {
@@ -41,6 +43,7 @@ public class UserController {
     }
 
     /** 更新用户 */
+    @AuditAspect.Audit(action = "UPDATE", resource = "USER")
     @PutMapping("/{id}")
     public ResponseEntity<?> update(@PathVariable Long id, @RequestBody User user) {
         try {
@@ -53,6 +56,7 @@ public class UserController {
     }
 
     /** 删除用户 */
+    @AuditAspect.Audit(action = "DELETE", resource = "USER")
     @DeleteMapping("/{id}")
     public ResponseEntity<?> delete(@PathVariable Long id) {
         try {
